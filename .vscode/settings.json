@@ -1,0 +1,15 @@
+{
+    "C_Cpp.clang_format_path": "/usr/lib/llvm-10/bin/clang-format",
+    "C_Cpp.default.includePath": [
+      "~/.conan/data/**", "./include/", "./ActuallyAGameEngine/include/", "C:/Users/zack/Documents/GitHub/PhysX/physx/include/"
+    ],
+    "files.associations": {
+        "span": "cpp",
+        "array": "cpp",
+        "ranges": "cpp",
+        "vector": "cpp",
+        "xstring": "cpp",
+        "xutility": "cpp",
+        "filesystem": "cpp"
+    }
+}
