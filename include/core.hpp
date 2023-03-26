@@ -104,7 +104,7 @@ using m44 = glm::mat4x4;
 
 inline u32
 safe_truncate_u64(u64 value) {
-    assert(value <= 0xFFFFFFFF);
+    assert(value <= 0xFFFF'FFFF);
     const u32 result = static_cast<u32>(value);
     return result;
 }

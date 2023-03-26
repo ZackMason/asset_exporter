@@ -113,7 +113,7 @@ close_pack_file(
     file.write((const char*)data.data(), data.size());
     file.close();
     
-    gen_info("packer", "Packed {} files", file_pack->file_count);
+    gen_warn("packer", "Packed {} files", file_pack->file_count);
 
 }
 
@@ -388,17 +388,17 @@ void pack_asset_directory(
     for (const auto& entry: std::filesystem::recursive_directory_iterator(fmt_str("{}", dir))) {
         std::string file_name = entry.path().string();
         std::replace(file_name.begin(), file_name.end(), '\\', '/');
-        if (has_extension(file_name, "obj") || has_extension(file_name, "fbx")) {
+        if (has_extension(file_name, "obj") || 
+            has_extension(file_name, "fbx")
+        ) {
 
             bool make_physics = false;
             PhysicsColliderType collider = PhysicsColliderType::CONVEX;
 
             if (std::find(physx_config.convex.begin(), physx_config.convex.end(), file_name) != physx_config.convex.end()) {
-                gen_warn("export", "convex");
                 make_physics = true;
             }
             if (std::find(physx_config.trimeshes.begin(), physx_config.trimeshes.end(), file_name) != physx_config.trimeshes.end()) {
-                gen_warn("export", "trimesh");
                 collider = PhysicsColliderType::TRIMESH;
                 make_physics = true;
             }
@@ -431,7 +431,7 @@ void pack_asset_directory(
             pack_file(packed_file, file_name, std::move(data), magic::text);
             
         } else {
-            gen_warn("export", "Unknown file type: {}", file_name);
+            gen_info("export", "Unknown file type: {}", file_name);
         }
     }
 
