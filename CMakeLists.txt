@@ -31,23 +31,22 @@ target_link_libraries(exporter ${CONAN_LIBS})
 target_compile_definitions(exporter PUBLIC GAME_ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/")
 
 set(PHYSX_ROOT_WIN
-    "C:/Users/crazy/Downloads/PhysX-brickadia-4.1.2/PhysX-brickadia-4.1.2/"
+    "C:/Users/zack/Documents/GitHub/PhysX5/PhysX"
 )
 
 # https://github.com/nyers33/minimal_glfw_physx/blob/main/src/CMakeLists.txt
 set(PHSYX_LIBS
-"PhysX_64.lib"
-"PhysXCommon_64.lib"
-"PhysXCooking_64.lib"
-"PhysXFoundation_64.lib"
+    "PhysX_64.lib"
+    "PhysXCommon_64.lib"
+    "PhysXCooking_64.lib"
+    "PhysXFoundation_64.lib"
 
-"PhysXPvdSDK_static_64.lib"
-"PhysXVehicle_static_64.lib"
-"PhysXExtensions_static_64.lib"
-"PhysXCharacterKinematic_static_64.lib"
+    "PhysXExtensions_static_64.lib"
 )
 
-set(PHSYX_LIBS_ROOT_DIR "${PHYSX_ROOT_WIN}/physx/bin/win.x86_64.vc143.md")
+
+
+set(PHSYX_LIBS_ROOT_DIR "${PHYSX_ROOT_WIN}/physx/bin/win.x86_64.vc142.md")
 
 include_directories("${PHYSX_ROOT_WIN}/physx/include" )
 include_directories("${PHYSX_ROOT_WIN}/pxshared/include" )

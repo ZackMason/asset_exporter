@@ -458,6 +458,8 @@ int main(int argc, const char* argv[]) {
         } else if (flag == "dir") {
             pack_asset_directory(param, output);
         }
+    } else {
+        gen_info("args", "Invalid argument count - {} provided, expected 4", argc);
     }
 
     return 0;
