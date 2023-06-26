@@ -30,9 +30,13 @@ target_link_libraries(exporter ${CONAN_LIBS})
 
 target_compile_definitions(exporter PUBLIC GAME_ASSETS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/")
 
-set(PHYSX_ROOT_WIN
-    "C:/Users/zack/Documents/GitHub/PhysX5/PhysX"
-)
+
+if(EXISTS "C:/Users/crazy")
+    set(PHYSX_ROOT_WIN "C:/Users/crazy/Documents/GitHub/PhysX5/PhysX")
+endif()
+if (EXISTS "C:/Users/zack")
+    set(PHYSX_ROOT_WIN "C:/Users/zack/Documents/GitHub/PhysX5/PhysX")
+endif()
 
 # https://github.com/nyers33/minimal_glfw_physx/blob/main/src/CMakeLists.txt
 set(PHSYX_LIBS
@@ -44,14 +48,12 @@ set(PHSYX_LIBS
     "PhysXExtensions_static_64.lib"
 )
 
-
-
 set(PHSYX_LIBS_ROOT_DIR "${PHYSX_ROOT_WIN}/physx/bin/win.x86_64.vc142.md")
 
 include_directories("${PHYSX_ROOT_WIN}/physx/include" )
 include_directories("${PHYSX_ROOT_WIN}/pxshared/include" )
 
 foreach(lib ${PHSYX_LIBS})
-    target_link_libraries(exporter optimized "${PHSYX_LIBS_ROOT_DIR}/checked/${lib}")
+    target_link_libraries(exporter optimized "${PHSYX_LIBS_ROOT_DIR}/release/${lib}")
     target_link_libraries(exporter debug "${PHSYX_LIBS_ROOT_DIR}/debug/${lib}")
 endforeach()

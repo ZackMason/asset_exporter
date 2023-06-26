@@ -1,3 +1,4 @@
+#define _SILENCE_CXX20_CISO646_REMOVED_WARNING
 #include "core.hpp"
 #include <fstream>
 #include <filesystem>
