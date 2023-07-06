@@ -23,9 +23,136 @@ constexpr u64 meta = 0xfeedbeeff04edead;
 constexpr u64 vers = 0x2;
 constexpr u64 mesh = 0x1212121212121212;
 constexpr u64 text = 0x1212121212121213;
+constexpr u64 skel = 0x1212691212121241;
+constexpr u64 anim = 0x1212691212121269;
 constexpr u64 physics = 0x1212121212121214;
 
 constexpr u64 table_start = 0x7abe17abe1;
+
+};
+
+namespace utl::anim {
+    bone_timeline_t::bone_timeline_t(std::string_view pname, bone_id_t pID, const aiNodeAnim* channel)
+        : id(pID), transform(1.0f)
+    {
+        std::memcpy(name, pname.data(), pname.size());
+        assert(channel->mNumPositionKeys < 512);
+        assert(channel->mNumRotationKeys < 512);
+        assert(channel->mNumScalingKeys < 512);
+        for (size_t positionIndex = 0; positionIndex < channel->mNumPositionKeys; ++positionIndex)
+        {
+            aiVector3D pos = channel->mPositionKeys[positionIndex].mValue;
+            float timeStamp = (float)channel->mPositionKeys[positionIndex].mTime;
+            keyframe<v3f>& data = positions[position_count++];
+            data.value = v3f(pos.x, pos.y, pos.z);
+            data.time = timeStamp;
+        }
+
+        for (size_t rotationIndex = 0; rotationIndex < channel->mNumRotationKeys; ++rotationIndex)
+        {
+            aiQuaternion orientation = channel->mRotationKeys[rotationIndex].mValue;
+            float timeStamp = (float)channel->mRotationKeys[rotationIndex].mTime;
+            keyframe<glm::quat>& data = rotations[rotation_count++];
+            data.value = glm::quat(orientation.w, orientation.x, orientation.y, orientation.z);
+            data.time = timeStamp;
+        }
+
+        for (size_t keyIndex = 0; keyIndex < channel->mNumScalingKeys; ++keyIndex)
+        {
+            aiVector3D scale = channel->mScalingKeys[keyIndex].mValue;
+            float timeStamp = (float)channel->mScalingKeys[keyIndex].mTime;
+            keyframe<v3f>& data = scales[scale_count++];
+            data.value = v3f(scale.x, scale.y, scale.z);
+            data.time = timeStamp;
+        }
+    }
+
+    void skeleton_t::load(const std::string& path)
+    {
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_GlobalScale);
+    
+        assert(scene && scene->mRootNode);
+
+        struct bone_pair_t {
+            std::string name;
+            m44 offset;
+        };
+
+        const auto convert_matrix = [](const aiMatrix4x4& from)	{
+            glm::mat4 to;
+            to[0][0] = from.a1; to[1][0] = from.a2; to[2][0] = from.a3; to[3][0] = from.a4;
+            to[0][1] = from.b1; to[1][1] = from.b2; to[2][1] = from.b3; to[3][1] = from.b4;
+            to[0][2] = from.c1; to[1][2] = from.c2; to[2][2] = from.c3; to[3][2] = from.c4;
+            to[0][3] = from.d1; to[1][3] = from.d2; to[2][3] = from.d3; to[3][3] = from.d4;
+            return to;
+        };
+
+
+        const auto parse_bone_names = [=](const aiScene* scene) -> std::vector<bone_pair_t> {
+            assert(scene);
+            assert(scene->HasMeshes());
+            assert(scene->mMeshes);
+
+            std::vector<bone_pair_t> bone_names;
+
+            for (size_t i{ 0 }; i < scene->mNumMeshes; i++) {
+                const auto mesh = scene->mMeshes[i];
+                if (mesh->HasBones()) {
+                    for (size_t j{ 0 }; j < mesh->mNumBones; j++) {
+                        std::string bone_name = mesh->mBones[j]->mName.C_Str();
+                        if (std::find_if(bone_names.begin(), bone_names.end(), [&](auto& a){ return a.name == bone_name; }) == bone_names.end()) {
+                            bone_names.push_back({
+                                bone_name, 
+                                convert_matrix(mesh->mBones[j]->mOffsetMatrix)
+                            });
+                        }
+                    }
+                }
+            }
+            gen_info(__FUNCTION__, "Found {} bones", bone_names.size());
+            return bone_names;
+        };
+
+        const auto read_heirarchy_data = [=](auto& skeleton, const aiNode* root, std::vector<bone_pair_t> bone_names) {
+            struct parse_node_t {
+                const aiNode* node{nullptr};
+                bone_id_t parent{-1};
+            };
+            std::stack<parse_node_t> stack;
+            stack.push({root, -1});
+
+            while (!stack.empty()) {
+                parse_node_t node = std::move(stack.top());
+                stack.pop();
+
+                assert(node.node);    
+
+                bone_id_t bone_id = -1;
+                //if (std::find(bone_names.cbegin(), bone_names.cend(), node.node->mName.C_Str()) != bone_names.cend()) {
+
+                    skeleton_bone_t bone;
+                    bone.name_hash = sid(std::string_view{node.node->mName.C_Str(), node.node->mName.length});
+                    bone.parent = node.parent;
+                    for (auto& [bone_name, offset]: bone_names) {
+                        if (bone_name == node.node->mName.C_Str()) {
+                            bone.offset = offset;
+                        }
+                    }
+            
+                    assert(skeleton.bone_count < skeleton_t::max_bones_());
+                    bone_id = (i32)skeleton.bone_count++;
+                    skeleton.bones[bone_id] = bone;
+                //}
+
+                for (size_t i = 0; i < node.node->mNumChildren; i++) {
+                    stack.push({node.node->mChildren[i], bone_id});
+                }
+            }
+        };
+        auto bone_names = parse_bone_names(scene);
+        read_heirarchy_data(*this, scene->mRootNode, bone_names);
+    }
 };
 
 std::string get_extension(const std::string& str) {
@@ -153,6 +280,29 @@ void serialize(utl::serializer_t& s, const gfx::vertex_t& v) {
     s.serialize(v.tex.y);
 }
 
+void serialize(utl::serializer_t& s, const gfx::skinned_vertex_t& v) {
+    s.serialize(v.pos.x);
+    s.serialize(v.pos.y);
+    s.serialize(v.pos.z);
+    
+    s.serialize(v.nrm.x);
+    s.serialize(v.nrm.y);
+    s.serialize(v.nrm.z);
+
+    s.serialize(v.tex.x);
+    s.serialize(v.tex.y);
+
+    s.serialize(v.bone_id[0]);
+    s.serialize(v.bone_id[1]);
+    s.serialize(v.bone_id[2]);
+    s.serialize(v.bone_id[3]);
+
+    s.serialize(v.weight.x);
+    s.serialize(v.weight.y);
+    s.serialize(v.weight.z);
+    s.serialize(v.weight.w);
+}
+
 template <typename Vertex>
 struct mesh_t {
     std::string mesh_name;
@@ -161,6 +311,43 @@ struct mesh_t {
     std::vector<u32>    indices{};
 };
 
+void set_vertex_bone_data(gfx::skinned_vertex_t& vertex, int bone_id, float weight) {
+    for (int i = 0; i < 4; ++i) {
+        if (vertex.bone_id[i] < 0) {
+            vertex.weight[i] = weight;
+            vertex.bone_id[i] = bone_id;
+            break;
+        }
+    }
+}
+
+void extract_bone_weight(
+    utl::anim::skeleton_t& skeleton,
+    std::vector<gfx::skinned_vertex_t>& vertices, 
+    aiMesh* mesh, 
+    const aiScene* scene
+) {
+    for (size_t boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex) {
+        const std::string bone_name = mesh->mBones[boneIndex]->mName.C_Str();
+        const int bone_id = skeleton.find_bone_id(sid(bone_name));
+        
+        if (bone_id == -1) {
+            gen_warn(__FUNCTION__, "Skeleton is missing bone: {}", bone_name);
+        }
+        assert(bone_id != -1 && "Skeleton is missing bones");
+
+        auto weights = mesh->mBones[boneIndex]->mWeights;
+        int numWeights = mesh->mBones[boneIndex]->mNumWeights;
+
+        for (int weightIndex = 0; weightIndex < numWeights; ++weightIndex) {
+            int vertexId = weights[weightIndex].mVertexId;
+            float weight = weights[weightIndex].mWeight;
+            assert(vertexId < vertices.size());
+            set_vertex_bone_data(vertices[vertexId], bone_id, weight);
+        }
+    }
+}
+
 template<typename Vertex>
 using loaded_mesh_t = std::vector<mesh_t<Vertex>>;
 
@@ -168,8 +355,10 @@ template<typename Vertex>
 void process_mesh(
     aiMesh* mesh, 
     const aiScene* scene, 
-    loaded_mesh_t<Vertex>& results
+    loaded_mesh_t<Vertex>& results,
+    utl::anim::skeleton_t* skeleton = nullptr
 ) {
+    std::vector<Vertex> vertices;
     results.back().mesh_name = (mesh->mName.C_Str());
     
     for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
@@ -190,7 +379,14 @@ void process_mesh(
             vertex.tex = glm::vec2(0.0f, 0.0f);
         }
 
-        results.back().vertices.push_back(vertex);
+        if constexpr (std::is_same_v<Vertex, gfx::skinned_vertex_t>) {
+            for (u32 j = 0; j < 4; j++) {
+                vertex.bone_id[j] = std::numeric_limits<u32>::max();
+                vertex.weight[j] = 0.0f;
+            }
+        }
+
+        vertices.push_back(vertex);
     }
 
     for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
@@ -199,6 +395,25 @@ void process_mesh(
         for (unsigned int j = 0; j < face.mNumIndices; j++)
             results.back().indices.push_back(face.mIndices[j]);
     }
+
+    if constexpr (std::is_same_v<Vertex, gfx::skinned_vertex_t>) {
+        if (skeleton) {
+            extract_bone_weight(*skeleton, vertices, mesh, scene);
+        } else {
+            gen_warn(__FUNCTION__, "No skeleton");
+        }
+
+        std::transform(
+            results.back().indices.begin(), 
+            results.back().indices.end(), 
+            std::back_inserter(results.back().vertices),
+            [&](auto i){ return vertices[i]; });
+
+        results.back().indices.clear(); 
+    } else {
+        results.back().vertices = std::move(vertices);
+    }
+
     // aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
     // aiColor3D color;
     // material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
@@ -218,12 +433,83 @@ void process_mesh(
     // results.back().material_name = save_string(name.C_Str());
 }
 
+void load_animation(
+    utl::anim::animation_t& animation,
+    const aiNode* ai_root,
+    const aiAnimation* ai_anim, 
+    const utl::anim::skeleton_t& skeleton
+) {
+    assert(ai_anim);
+    assert(ai_root);
+    const auto size = ai_anim->mNumChannels;
+    std::memcpy(animation.name, ai_anim->mName.C_Str(), std::min((u32)array_count(animation.name), ai_anim->mName.length));
+
+    const auto convert_matrix = [](const aiMatrix4x4& from)	{
+        glm::mat4 to;
+        to[0][0] = from.a1; to[1][0] = from.a2; to[2][0] = from.a3; to[3][0] = from.a4;
+        to[0][1] = from.b1; to[1][1] = from.b2; to[2][1] = from.b3; to[3][1] = from.b4;
+        to[0][2] = from.c1; to[1][2] = from.c2; to[2][2] = from.c3; to[3][2] = from.c4;
+        to[0][3] = from.d1; to[1][3] = from.d2; to[2][3] = from.d3; to[3][3] = from.d4;
+        return to;
+    };
+
+
+    for(size_t i{0}; i < size; i++) {
+        const auto channel = ai_anim->mChannels[i];
+
+        const std::string bone_name = channel->mNodeName.C_Str();
+        const auto bone_id = skeleton.find_bone_id(sid(bone_name));
+        if (bone_id == -1) {
+            gen_error(__FUNCTION__, "Failed to find bone {}", bone_name);
+            continue;
+        }
+        assert(bone_id != -1);
+        const auto& bone = skeleton.find_bone(sid(bone_name));
+
+        animation.node_count = bone_id >= animation.node_count ? bone_id + 1 : animation.node_count;
+        animation.nodes[bone_id].offset = bone.offset;
+        animation.nodes[bone_id].parent = bone.parent;
+        const auto ai_node = ai_root->FindNode(bone_name.c_str());
+        if (ai_node) {
+            animation.nodes[bone_id].transform = convert_matrix(ai_node->mTransformation);
+        }
+        else {
+            gen_warn(__FUNCTION__, "Failed to find node for transform: {}", bone_name);
+            animation.nodes[bone_id].transform = m44(1.0f);
+        }
+        animation.nodes[bone_id].bone.emplace(std::string_view{channel->mNodeName.data, channel->mNodeName.length}, bone_id, channel);
+    }
+}
+
+bool process_animations(
+    aiNode* start,
+    const aiScene* scene,
+    std::vector<utl::anim::animation_t>& results,
+    const utl::anim::skeleton_t& skeleton
+) {
+    for (size_t i{ 0 }; i < scene->mNumAnimations; i++) {
+        auto* ai_animation = scene->mAnimations[i];
+        results.push_back(utl::anim::animation_t{});
+        auto& animation = results.back();
+        animation.duration = (f32)ai_animation->mDuration;
+        animation.ticks_per_second = (i32)ai_animation->mTicksPerSecond;
+        load_animation(animation, scene->mRootNode, ai_animation, skeleton);
+    }
+
+    return true;
+}
+
 template<typename Vertex>
-void process_node(
+bool process_node(
     aiNode *start,
     const aiScene *scene, 
-    loaded_mesh_t<Vertex>& results
+    loaded_mesh_t<Vertex>& results,
+    auto&& process, u64 looking_for, utl::anim::skeleton_t* skeleton = 0
 ) {
+    if (looking_for == magic::skel && !skeleton) {
+        return false;
+    }
+    bool has_looking_for = looking_for == magic::mesh;
     std::stack<const aiNode*> stack;
     stack.push(scene->mRootNode);
     while (!stack.empty()) {
@@ -232,14 +518,26 @@ void process_node(
 
         for(unsigned int i = 0; i < node->mNumMeshes; i++) {
             aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+
+            if (looking_for == magic::skel && skeleton) {
+                if (mesh->HasBones()) {
+                    gen_info(__FUNCTION__, "Mesh {} has {} bones", mesh->mName.C_Str(), mesh->mNumBones);
+                    has_looking_for = true;
+                } else {
+                    gen_info(__FUNCTION__, "Mesh {} has no bones", mesh->mName.C_Str());
+                }
+            }
+
             results.emplace_back();
-            process_mesh(mesh, scene, results);
+            process(mesh, scene, results, skeleton);
         }
 
         for(unsigned int i = 0; i < node->mNumChildren; i++) {
             stack.push(node->mChildren[i]);
         }
     }
+
+    return has_looking_for;
 }
 
 template <typename Vertex>
@@ -307,14 +605,27 @@ export_physics_mesh(
     std::memcpy(physics_data.data(), buf.getData(), buf.getSize());
 }
 
+
 template <typename Vertex>
-inline std::vector<u8>
+inline [[nodiscard]] std::vector<u8>
 export_mesh(
     arena_t* arena,
     std::string_view path,
     std::vector<u8>* physics_data = 0,
     PhysicsColliderType physics_type = PhysicsColliderType::CONVEX,
     phys::physx_state_t* physx_state = 0
+) {
+    return {};
+}
+
+template <>
+inline [[nodiscard]] std::vector<u8>
+export_mesh<gfx::vertex_t>(
+    arena_t* arena,
+    std::string_view path,
+    std::vector<u8>* physics_data,
+    PhysicsColliderType physics_type,
+    phys::physx_state_t* physx_state
 ) {
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(fmt::format("{}", path), 
@@ -328,8 +639,8 @@ export_mesh(
         throw std::runtime_error(importer.GetErrorString());
     }
 
-    loaded_mesh_t<Vertex> results;
-    process_node(scene->mRootNode, scene, results);
+    loaded_mesh_t<gfx::vertex_t> results;
+    process_node<gfx::vertex_t>(scene->mRootNode, scene, results, process_mesh<gfx::vertex_t>, magic::mesh);
 
     std::vector<u8> data;
     utl::serializer_t serializer{data};
@@ -352,6 +663,80 @@ export_mesh(
     if (physics_data) {
         export_physics_mesh(results, *physics_data, physics_type, *physx_state);
     }
+
+    return data;
+}
+
+template <>
+inline [[nodiscard]] std::vector<u8>
+export_mesh<gfx::skinned_vertex_t>(
+    arena_t* arena,
+    std::string_view path,
+    std::vector<u8>* physics_data,
+    PhysicsColliderType physics_type,
+    phys::physx_state_t* physx_state
+) {
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(fmt::format("{}", path), 
+        aiProcess_Triangulate | 
+        aiProcess_JoinIdenticalVertices | 
+        aiProcess_GenNormals | 
+        aiProcess_GlobalScale
+    );
+
+    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+        throw std::runtime_error(importer.GetErrorString());
+    }
+
+    utl::anim::skeleton_t* skeleton_ = new utl::anim::skeleton_t;
+    utl::anim::skeleton_t& skeleton = *skeleton_;
+    skeleton.load(std::string{path});
+    if (skeleton.bone_count == 0) {
+        gen_warn(__FUNCTION__, "Skeleton didnt load any boners");
+        return {};
+    }
+    std::vector<utl::anim::animation_t> animations{};
+    process_animations(scene->mRootNode, scene, animations, skeleton);
+
+    loaded_mesh_t<gfx::skinned_vertex_t> results;
+    if (process_node<gfx::skinned_vertex_t>(scene->mRootNode, scene, results, process_mesh<gfx::skinned_vertex_t>, magic::skel, &skeleton) == false) {
+        return {};
+    }
+    
+    std::vector<u8> data;
+    utl::serializer_t serializer{data};
+    
+    serializer.serialize(magic::meta);
+    serializer.serialize(magic::vers);
+    serializer.serialize(magic::skel);
+
+    serializer.serialize(results.size()); // number of meshes
+    for (auto& mesh: results) {
+        serializer.serialize(mesh.mesh_name);
+        serializer.serialize(mesh.vertices.size());
+        for (const auto& vertex: mesh.vertices) {
+            serialize(serializer, vertex);
+        }
+        // serializer.serialize(std::span{mesh.indices});
+    }
+    gen_info("mesh", "Loaded {} meshes", results.size());
+
+    if (physics_data) {
+        export_physics_mesh(results, *physics_data, physics_type, *physx_state);
+    }
+
+
+    gen_info(__FUNCTION__, "loaded {} animations", animations.size());
+
+    serializer.serialize(magic::anim);
+
+    u64 anim_size = sizeof(utl::anim::animation_t) * animations.size();
+    std::span<u8> anim_data{(u8*)animations.data(), anim_size};
+    serializer.serialize((u64)animations.size());
+    serializer.serialize(anim_data);
+
+    std::span<u8> skeleton_data{(u8*)&skeleton, sizeof(skeleton)};
+    serializer.serialize(skeleton_data);
 
     return data;
 }
@@ -390,7 +775,8 @@ void pack_asset_directory(
         std::string file_name = entry.path().string();
         std::replace(file_name.begin(), file_name.end(), '\\', '/');
         if (has_extension(file_name, "obj") || 
-            has_extension(file_name, "fbx")
+            has_extension(file_name, "fbx") ||
+            has_extension(file_name, "gltf")
         ) {
 
             bool make_physics = false;
@@ -405,13 +791,23 @@ void pack_asset_directory(
             }
 
             std::vector<u8> physics_data;
-            std::vector<u8> data = export_mesh<gfx::vertex_t>(
+            std::vector<u8> data = export_mesh<gfx::skinned_vertex_t>(
                 arena, file_name, 
                 make_physics ? &physics_data : 0,
                 collider,
                 make_physics ? &physx_state : 0
             );
-            pack_file(packed_file, file_name, std::move(data), magic::mesh);
+            if (data.empty()) {
+                data = export_mesh<gfx::vertex_t>(
+                    arena, file_name, 
+                    make_physics ? &physics_data : 0,
+                    collider,
+                    make_physics ? &physx_state : 0
+                );
+                pack_file(packed_file, file_name, std::move(data), magic::mesh);
+            } else {
+                pack_file(packed_file, file_name, std::move(data), magic::skel);
+            }
 
             if (make_physics) {
                 if (collider == PhysicsColliderType::TRIMESH) {
