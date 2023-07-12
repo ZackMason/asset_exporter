@@ -1190,6 +1190,11 @@ struct serializer_t {
         }
     }
 
+    template <typename T>
+    inline void serialize_bytes(const T& value) {
+        data_.insert(data_.end(), (u8*)&value, (u8*)&value + sizeof(T));
+    }
+
 private:
     std::vector<uint8_t>& data_;
 };

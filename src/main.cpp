@@ -18,6 +18,12 @@ using json = nlohmann::json;
 /////////////////////////////////////////////
 // Magic Numbers
 
+constexpr auto make_magic(const char key[8]) {
+    u64 res=0;
+    for(size_t i=0;i<4;i++) { res = (res<<8) | key[i];}
+    return res;
+}
+
 namespace magic {
 constexpr u64 meta = 0xfeedbeeff04edead;
 constexpr u64 vers = 0x2;
@@ -26,6 +32,7 @@ constexpr u64 text = 0x1212121212121213;
 constexpr u64 skel = 0x1212691212121241;
 constexpr u64 anim = 0x1212691212121269;
 constexpr u64 physics = 0x1212121212121214;
+constexpr u64 mate = make_magic("MATERIAL");
 
 constexpr u64 table_start = 0x7abe17abe1;
 
@@ -70,8 +77,17 @@ namespace utl::anim {
     void skeleton_t::load(const std::string& path)
     {
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_GlobalScale);
-    
+        const aiScene* scene = importer.ReadFile(fmt::format("{}", path), 
+            aiProcess_Triangulate | 
+            aiProcess_JoinIdenticalVertices | 
+            aiProcess_GenNormals | 
+            aiProcess_GlobalScale
+        );
+
+        if (!scene) {
+            gen_error(__FUNCTION__, "{}", importer.GetErrorString());
+        }
+
         assert(scene && scene->mRootNode);
 
         struct bone_pair_t {
@@ -303,12 +319,26 @@ void serialize(utl::serializer_t& s, const gfx::skinned_vertex_t& v) {
     s.serialize(v.weight.w);
 }
 
+struct material_info_t {
+    char name[64]{};
+    v4f color;
+    f32 roughness{0.5f};
+    f32 metallic{0.0f};
+    f32 emission{0.0f};
+
+    u64 albedo_id;
+    u64 normal_id;
+    char albedo[128];
+    char normal[128];
+};
+
 template <typename Vertex>
 struct mesh_t {
     std::string mesh_name;
 
     std::vector<Vertex> vertices{};
     std::vector<u32>    indices{};
+    material_info_t     material{};
 };
 
 void set_vertex_bone_data(gfx::skinned_vertex_t& vertex, int bone_id, float weight) {
@@ -359,7 +389,8 @@ void process_mesh(
     utl::anim::skeleton_t* skeleton = nullptr
 ) {
     std::vector<Vertex> vertices;
-    results.back().mesh_name = (mesh->mName.C_Str());
+    auto& r = results.back();
+    r.mesh_name = (mesh->mName.C_Str());
     
     for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
         Vertex vertex;
@@ -391,9 +422,9 @@ void process_mesh(
 
     for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
         aiFace face = mesh->mFaces[i];
-        assert(face.mNumIndices == 3);
+        // assert(face.mNumIndices == 3);
         for (unsigned int j = 0; j < face.mNumIndices; j++)
-            results.back().indices.push_back(face.mIndices[j]);
+            r.indices.push_back(face.mIndices[j]);
     }
 
     if constexpr (std::is_same_v<Vertex, gfx::skinned_vertex_t>) {
@@ -404,33 +435,61 @@ void process_mesh(
         }
 
         std::transform(
-            results.back().indices.begin(), 
-            results.back().indices.end(), 
-            std::back_inserter(results.back().vertices),
+            r.indices.begin(), 
+            r.indices.end(), 
+            std::back_inserter(r.vertices),
             [&](auto i){ return vertices[i]; });
 
-        results.back().indices.clear(); 
+        r.indices.clear(); 
     } else {
-        results.back().vertices = std::move(vertices);
+        r.vertices = std::move(vertices);
     }
 
-    // aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-    // aiColor3D color;
-    // material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
-    // results.back().material.base_color = { color.r, color.g, color.b };
+    aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+    aiColor3D color;
+    material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
+    r.material.color = { color.r, color.g, color.b, 1.0f};
 
-    // material->Get(AI_MATKEY_COLOR_AMBIENT, color);
-    // results.back().material.emissive = { color.r };    
+    material->Get(AI_MATKEY_COLOR_AMBIENT, color);
+    r.material.emission = { color.r };    
 
-    // if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
-    //     aiString diffuse_name;
-    //     material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_name);
-    //     results.back().material.albedo_texture = save_string(diffuse_name.C_Str());
-    // }
+    material->Get(AI_MATKEY_METALLIC_FACTOR, r.material.metallic);
+    material->Get(AI_MATKEY_ROUGHNESS_FACTOR, r.material.roughness);
 
-    // aiString name;
-    // material->Get(AI_MATKEY_NAME, name);
-    // results.back().material_name = save_string(name.C_Str());
+    if (material->GetTextureCount(aiTextureType_BASE_COLOR) > 0) {
+        aiString diffuse_name;
+        material->GetTexture(aiTextureType_BASE_COLOR, 0, &diffuse_name);
+        if (diffuse_name.data[0] == '*') {
+            diffuse_name = scene->GetEmbeddedTexture(diffuse_name.C_Str())->mFilename;
+        }
+        if (diffuse_name.length > array_count(r.material.albedo)) {
+            gen_warn(__FUNCTION__, "Albedo texture path is too large", diffuse_name.C_Str());
+        } else {
+            gen_warn(__FUNCTION__, "Albedo Texture: {}", diffuse_name.data);
+        }
+        std::memcpy(r.material.albedo, diffuse_name.C_Str(), diffuse_name.length);
+    }
+    if (material->GetTextureCount(aiTextureType_NORMAL_CAMERA) > 0) {
+        aiString normal_name;
+        material->GetTexture(aiTextureType_NORMAL_CAMERA, 0, &normal_name);
+        if (normal_name.data[0] == '*') {
+            normal_name = scene->GetEmbeddedTexture(normal_name.C_Str())->mFilename;
+        }
+        if (normal_name.length > array_count(r.material.albedo)) {
+            gen_warn(__FUNCTION__, "Normal texture path is too large", normal_name.C_Str());
+        } else {
+            gen_warn(__FUNCTION__, "Normal Texture: {}", normal_name.data);
+        }
+        std::memcpy(r.material.normal, normal_name.C_Str(), normal_name.length);
+    }
+
+    aiString name;
+    material->Get(AI_MATKEY_NAME, name);
+    
+    if (name.length > array_count(r.material.name)) {
+        gen_warn(__FUNCTION__, "Albedo texture path is too larger", name.C_Str());
+    }
+    std::memcpy(r.material.name, name.C_Str(), name.length);
 }
 
 void load_animation(
@@ -552,6 +611,7 @@ export_physics_mesh(
     std::vector<u32> indices;
 
     for (const auto& mesh: meshes) {
+        u32 offset = safe_truncate_u64(positions.size());
         std::transform(mesh.vertices.cbegin(), 
             mesh.vertices.cend(), 
             std::back_inserter(positions), 
@@ -561,8 +621,8 @@ export_physics_mesh(
         std::transform(mesh.indices.cbegin(), 
             mesh.indices.cend(), 
             std::back_inserter(indices), 
-            [](const auto id) {
-                return id;
+            [=](const auto id) {
+                return offset + id;
         });
     }
 
@@ -658,6 +718,13 @@ export_mesh<gfx::vertex_t>(
         }
         serializer.serialize(std::span{mesh.indices});
     }
+
+    serializer.serialize(magic::mate);
+
+    for (auto& mesh: results) {
+        serializer.serialize_bytes(mesh.material);
+    }
+
     gen_info("mesh", "Loaded {} meshes", results.size());
 
     if (physics_data) {
@@ -776,6 +843,7 @@ void pack_asset_directory(
         std::replace(file_name.begin(), file_name.end(), '\\', '/');
         if (has_extension(file_name, "obj") || 
             has_extension(file_name, "fbx") ||
+            has_extension(file_name, "glb") ||
             has_extension(file_name, "gltf")
         ) {
 
