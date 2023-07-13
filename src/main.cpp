@@ -610,7 +610,27 @@ export_physics_mesh(
     std::vector<v3f> positions;
     std::vector<u32> indices;
 
+
     for (const auto& mesh: meshes) {
+        if (physics_type==PhysicsColliderType::TRIMESH) {
+            if (mesh.mesh_name.find("<trimesh>") == std::string::npos)
+            {
+                gen_warn(__FUNCTION__, "Skipping submesh: {}", mesh.mesh_name);
+                continue;
+            } else {
+                gen_warn(__FUNCTION__, "Cooking submesh: {}", mesh.mesh_name);
+            }
+        }
+        if (physics_type==PhysicsColliderType::CONVEX) {
+            if (mesh.mesh_name.find("<convex>") == std::string::npos)
+            {
+                gen_warn(__FUNCTION__, "Skipping submesh: {}", mesh.mesh_name);
+                continue;
+            } else {
+                gen_warn(__FUNCTION__, "Cooking submesh: {}", mesh.mesh_name);
+            }
+        }
+
         u32 offset = safe_truncate_u64(positions.size());
         std::transform(mesh.vertices.cbegin(), 
             mesh.vertices.cend(), 
@@ -625,6 +645,8 @@ export_physics_mesh(
                 return offset + id;
         });
     }
+
+    if (positions.size() == 0) return;
 
     physx::PxDefaultMemoryOutputStream buf;
 
@@ -866,6 +888,7 @@ void pack_asset_directory(
                 make_physics ? &physx_state : 0
             );
             if (data.empty()) {
+                physics_data.clear();
                 data = export_mesh<gfx::vertex_t>(
                     arena, file_name, 
                     make_physics ? &physics_data : 0,
@@ -877,7 +900,7 @@ void pack_asset_directory(
                 pack_file(packed_file, file_name, std::move(data), magic::skel);
             }
 
-            if (make_physics) {
+            if (make_physics && physics_data.size()) {
                 if (collider == PhysicsColliderType::TRIMESH) {
                     pack_file(packed_file, file_name+".trimesh.physx", std::move(physics_data), magic::physics);
                 } else if (collider == PhysicsColliderType::CONVEX) {
