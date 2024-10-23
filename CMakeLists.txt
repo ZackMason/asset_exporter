@@ -34,7 +34,7 @@ target_compile_definitions(exporter PUBLIC GAME_ASSETS_PATH="${CMAKE_CURRENT_SOU
 
 
 if(EXISTS "C:/Users/crazy")
-    set(PHYSX_ROOT_WIN "C:/Users/crazy/Documents/GitHub/PhysX5/PhysX")
+    set(PHYSX_ROOT_WIN "C:/Users/crazy/Documents/GitHub/PhysX")
 endif()
 if (EXISTS "C:/Users/zack")
     set(PHYSX_ROOT_WIN "C:/Users/zack/Documents/GitHub/PhysX5/PhysX")
@@ -50,9 +50,10 @@ set(PHSYX_LIBS
     "PhysXExtensions_static_64.lib"
 )
 
-set(PHSYX_LIBS_ROOT_DIR "${PHYSX_ROOT_WIN}/physx/bin/win.x86_64.vc142.md")
+set(PHSYX_LIBS_ROOT_DIR "${PHYSX_ROOT_WIN}/physx/bin/win.x86_64.vc143.md")
 
 include_directories("${PHYSX_ROOT_WIN}/physx/include" )
+include_directories("${PHYSX_ROOT_WIN}/physx/include/cooking" )
 include_directories("${PHYSX_ROOT_WIN}/pxshared/include" )
 
 foreach(lib ${PHSYX_LIBS})

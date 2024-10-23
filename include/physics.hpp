@@ -27,7 +27,7 @@ namespace phys {
         physx::PxPvd* pvd{nullptr};
         physx::PxPhysics* physics{nullptr};
         physx::PxDefaultCpuDispatcher* dispatcher{nullptr};
-        physx::PxCooking* cooking{nullptr};
+        // physx::PxCooking* cooking{nullptr};
         error_callback_t error_callback;
         physx::PxDefaultAllocator default_allocator;
     };
@@ -50,8 +50,8 @@ namespace phys {
         assert(state.physics);
         state.dispatcher = PxDefaultCpuDispatcherCreate(2);
 
-        state.cooking = PxCreateCooking(PX_PHYSICS_VERSION, *state.foundation, PxCookingParams(state.physics->getTolerancesScale()));
-        assert(state.cooking);
+        // state.cooking = PxCreateCooking(PX_PHYSICS_VERSION, *state.foundation, PxCookingParams(state.physics->getTolerancesScale()));
+        // assert(state.cooking);
     }
 
 

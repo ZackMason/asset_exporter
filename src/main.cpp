@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <sstream>
 #include <algorithm>
+#include <execution>
+#include <mutex>
 
 #include "assimp/Importer.hpp"
 #include "assimp/scene.h"
@@ -13,6 +15,11 @@
 
 #include "nlohmann/json.hpp"
 
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_image.h"
+#include "stb_truetype.h"
+
 using json = nlohmann::json;
 
 /////////////////////////////////////////////
@@ -20,7 +27,7 @@ using json = nlohmann::json;
 
 constexpr auto make_magic(const char key[8]) {
     u64 res=0;
-    for(size_t i=0;i<4;i++) { res = (res<<8) | key[i];}
+    for(size_t i=0;i<8;i++) { res = (res<<8) | key[i];}
     return res;
 }
 
@@ -29,6 +36,7 @@ constexpr u64 meta = 0xfeedbeeff04edead;
 constexpr u64 vers = 0x2;
 constexpr u64 mesh = 0x1212121212121212;
 constexpr u64 text = 0x1212121212121213;
+constexpr u64 img = make_magic("ZTEXTURE");
 constexpr u64 skel = 0x1212691212121241;
 constexpr u64 anim = 0x1212691212121269;
 constexpr u64 physics = 0x1212121212121214;
@@ -126,7 +134,7 @@ namespace utl::anim {
                     }
                 }
             }
-            gen_info(__FUNCTION__, "Found {} bones", bone_names.size());
+            ztd_info(__FUNCTION__, "Found {} bones", bone_names.size());
             return bone_names;
         };
 
@@ -268,7 +276,7 @@ pack_file(
     std::vector<u8>&& data,
     u64 file_type
 ) {
-    gen_info("export", "Writing file: {}, offset: {}, size: {}", path, file_pack->resource_size, data.size());
+    ztd_info("export", "Writing file: {}, offset: {}, size: {}", path, file_pack->resource_size, data.size());
 
     file_pack->table.emplace_back(resource_table_entry_t(std::string{path}, file_type, data.size()));
 
@@ -580,10 +588,10 @@ bool process_node(
 
             if (looking_for == magic::skel && skeleton) {
                 if (mesh->HasBones()) {
-                    gen_info(__FUNCTION__, "Mesh {} has {} bones", mesh->mName.C_Str(), mesh->mNumBones);
+                    ztd_info(__FUNCTION__, "Mesh {} has {} bones", mesh->mName.C_Str(), mesh->mNumBones);
                     has_looking_for = true;
                 } else {
-                    gen_info(__FUNCTION__, "Mesh {} has no bones", mesh->mName.C_Str());
+                    ztd_info(__FUNCTION__, "Mesh {} has no bones", mesh->mName.C_Str());
                 }
             }
 
@@ -649,6 +657,7 @@ export_physics_mesh(
     if (positions.size() == 0) return;
 
     physx::PxDefaultMemoryOutputStream buf;
+    physx::PxCookingParams params(state.physics->getTolerancesScale());
 
     switch(physics_type) {
         case PhysicsColliderType::CONVEX: {
@@ -661,7 +670,8 @@ export_physics_mesh(
             //convexDesc.polygons.data    = indices ? indices->data() : nullptr;
             convexDesc.flags            = physx::PxConvexFlag::eCOMPUTE_CONVEX;
 
-            if(!state.cooking->cookConvexMesh(convexDesc, buf)) {
+            // if(!state.cooking->cookConvexMesh(convexDesc, buf)) {
+            if(!PxCookConvexMesh(params, convexDesc, buf)) {
                 gen_error("physx", "Error cooking convex");
             }
         } break;
@@ -675,7 +685,7 @@ export_physics_mesh(
             meshDesc.triangles.count = (physx::PxU32)indices.size()/3;
             meshDesc.triangles.stride = sizeof(u32) * 3;
 
-            if (!state.cooking->cookTriangleMesh(meshDesc, buf)) {
+            if (!PxCookTriangleMesh(params, meshDesc, buf)) {
                 gen_error("physx", "Error cooking trimesh");
             }
         } break;
@@ -747,7 +757,7 @@ export_mesh<gfx::vertex_t>(
         serializer.serialize_bytes(mesh.material);
     }
 
-    gen_info("mesh", "Loaded {} meshes", results.size());
+    ztd_info("mesh", "Loaded {} meshes", results.size());
 
     if (physics_data) {
         export_physics_mesh(results, *physics_data, physics_type, *physx_state);
@@ -808,14 +818,14 @@ export_mesh<gfx::skinned_vertex_t>(
         }
         // serializer.serialize(std::span{mesh.indices});
     }
-    gen_info("mesh", "Loaded {} meshes", results.size());
+    ztd_info("mesh", "Loaded {} meshes", results.size());
 
     if (physics_data) {
         export_physics_mesh(results, *physics_data, physics_type, *physx_state);
     }
 
 
-    gen_info(__FUNCTION__, "loaded {} animations", animations.size());
+    ztd_info(__FUNCTION__, "loaded {} animations", animations.size());
 
     serializer.serialize(magic::anim);
 
@@ -829,6 +839,32 @@ export_mesh<gfx::skinned_vertex_t>(
 
     return data;
 }
+
+struct file_worker_t {
+    struct job_t {
+        std::string     filename;
+        std::vector<u8> data;
+        u64             magic;
+    };
+    std::vector<job_t> jobs;
+    static inline std::vector<file_worker_t*> inst;
+    static inline std::mutex inst_mut;
+
+    file_worker_t() {
+        std::lock_guard lock{inst_mut};
+        ztd_info("file_worker", "Initializing worker {}", inst.size());
+        inst.push_back(this);
+    }
+
+    void post(std::string name, std::vector<u8> data, u64 magic) {
+        jobs.push_back(job_t{std::move(name), std::move(data), magic});
+    }
+};
+
+file_worker_t& make_worker() {
+    thread_local file_worker_t worker;
+    return worker;
+};
 
 void pack_asset_directory(
     std::string_view dir,
@@ -851,17 +887,23 @@ void pack_asset_directory(
         physx_defs >> j;
         
         for (const auto mesh: j["trimesh"]) {
-            gen_info("phyx::config", "Trimesh: {}", mesh);
+            ztd_info("phyx::config", "Trimesh: {}", mesh);
             physx_config.trimeshes.push_back(mesh);
         }
         for (const auto mesh: j["convex"]) {
-            gen_info("phyx::config", "Convex: {}", mesh);
+            ztd_info("phyx::config", "Convex: {}", mesh);
             physx_config.convex.push_back(mesh);
         }
     }
 
+    std::vector<std::string> files;
     for (const auto& entry: std::filesystem::recursive_directory_iterator(fmt_str("{}", dir))) {
         std::string file_name = entry.path().string();
+        files.push_back(file_name);
+    }
+
+    std::for_each(std::execution::par_unseq, files.begin(), files.end(), [&](std::string& file_name) {
+        auto& worker = make_worker();
         std::replace(file_name.begin(), file_name.end(), '\\', '/');
         if (has_extension(file_name, "obj") || 
             has_extension(file_name, "fbx") ||
@@ -895,31 +937,74 @@ void pack_asset_directory(
                     collider,
                     make_physics ? &physx_state : 0
                 );
-                pack_file(packed_file, file_name, std::move(data), magic::mesh);
+                // pack_file(packed_file, file_name, std::move(data), magic::mesh);
+                worker.post(file_name, std::move(data), magic::mesh);
             } else {
-                pack_file(packed_file, file_name, std::move(data), magic::skel);
+                // pack_file(packed_file, file_name, std::move(data), magic::skel);
+                worker.post(file_name, std::move(data), magic::skel);
             }
 
             if (make_physics && physics_data.size()) {
                 if (collider == PhysicsColliderType::TRIMESH) {
-                    pack_file(packed_file, file_name+".trimesh.physx", std::move(physics_data), magic::physics);
+                    // pack_file(packed_file, file_name+".trimesh.physx", std::move(physics_data), magic::physics);
+                    worker.post(file_name+".trimesh.physx", std::move(physics_data), magic::physics);
                 } else if (collider == PhysicsColliderType::CONVEX) {
-                    pack_file(packed_file, file_name+".convex.physx", std::move(physics_data), magic::physics);
+                    // pack_file(packed_file, file_name+".convex.physx", std::move(physics_data), magic::physics);
+                    worker.post(file_name+".convex.physx", std::move(physics_data), magic::physics);
                 }
             }
+        } else if (
+            has_extension(file_name, "png") 
+        ) {
+            stbi_set_flip_vertically_on_load(true);
+            std::vector<u8> data{};
+            utl::serializer_t ser{data};
 
+            i32 w = 0, h = 0, c = 4;
+
+            u8* pixels = 0;
+            if (has_extension(file_name, "png")) {
+                pixels = stbi_load(file_name.c_str(), &w, &h, &c, STBI_rgb_alpha);
+            } else {
+                pixels = stbi_load(std::format("{}.png", file_name).c_str(), &w, &h, &c, STBI_rgb_alpha);
+            }
+            if (!pixels) {
+                pixels = stbi_load(std::format("{}.jpg", file_name).c_str(), &w, &h, &c, STBI_rgb_alpha);
+            }
+            if (!pixels) {
+                pixels = stbi_load(file_name.c_str(), &w, &h, &c, STBI_rgb_alpha);
+            }
+            if (!pixels) {
+                pixels = stbi_load("res/textures/null.png", &w, &h, &c, STBI_rgb_alpha);
+            }
+            
+            ser.serialize(w);
+            ser.serialize(h);
+            ser.serialize(c);
+            if (w<0||h<0||c<0) { gen_error("Invalid texture dim: {} x {} - {}", w, h, c); }
+            ser.serialize(std::span{pixels, size_t(w*h*c)});
+
+            // pack_file(packed_file, file_name, std::move(data), magic::img);
+            worker.post(file_name, std::move(data), magic::img);
         } else if (
             has_extension(file_name, "txt") || 
+            has_extension(file_name, "csv") || 
             has_extension(file_name, "json")
         ) {
             std::vector<u8> data;
             utl::serializer_t saver{data};
             std::ifstream file{file_name};
             saver.serialize((std::stringstream{} << file.rdbuf()).str());
-            pack_file(packed_file, file_name, std::move(data), magic::text);
-            
+            // pack_file(packed_file, file_name, std::move(data), magic::text);
+            worker.post(file_name, std::move(data), magic::text);
         } else {
-            gen_info("export", "Unknown file type: {}", file_name);
+            ztd_info("export", "Unknown file type: {}", file_name);
+        }
+    });
+
+    for (auto& worker : file_worker_t::inst) {
+        for (auto& job: worker->jobs) {
+            pack_file(packed_file, std::move(job.filename), std::move(job.data), job.magic);
         }
     }
 
@@ -927,6 +1012,7 @@ void pack_asset_directory(
 }
 
 int main(int argc, const char* argv[]) {
+    utl::profile_t p{"time"};
     if (argc >= 4) {
         
         constexpr size_t arena_size = megabytes(512);
@@ -937,17 +1023,20 @@ int main(int argc, const char* argv[]) {
         std::string_view flag = argv[1];
         std::string_view param = argv[2];
         std::string_view output = argv[3];
+        try {
+            if (flag == "mesh") {
+                auto data = export_mesh<gfx::vertex_t>(arena, param);
 
-        if (flag == "mesh") {
-            auto data = export_mesh<gfx::vertex_t>(arena, param);
-
-            std::ofstream file{fmt_str("{}", output), std::ios::binary};
-            file.write((const char*)data.data(), data.size());
-        } else if (flag == "dir") {
-            pack_asset_directory(param, output);
+                std::ofstream file{fmt_str("{}", output), std::ios::binary};
+                file.write((const char*)data.data(), data.size());
+            } else if (flag == "dir") {
+                pack_asset_directory(param, output);
+            }
+        } catch (std::exception & e) {
+            gen_error("ex", "{}", e.what());
         }
     } else {
-        gen_info("args", "Invalid argument count - {} provided, expected 4", argc);
+        ztd_info("args", "Invalid argument count - {} provided, expected 4", argc);
     }
 
     return 0;

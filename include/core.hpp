@@ -32,6 +32,7 @@
 #include <array>
 #include <optional>
 #include <vector>
+#include <chrono>
 
 #include <string>
 #include <string_view>
@@ -88,7 +89,7 @@ using m44 = glm::mat4x4;
 
 #define fmt_str(...) (fmt::format(__VA_ARGS__))
 #define println(...) do { fmt::print(__VA_ARGS__); } while(0)
-#define gen_info(cat, str, ...) do { fmt::print(fg(fmt::color::white) | fmt::emphasis::bold, fmt_str("[info][{}]: {}\n", cat, str), __VA_ARGS__); } while(0)
+#define ztd_info(cat, str, ...) do { fmt::print(fg(fmt::color::white) | fmt::emphasis::bold, fmt_str("[info][{}]: {}\n", cat, str), __VA_ARGS__); } while(0)
 #define gen_warn(cat, str, ...) do { fmt::print(stderr, fg(fmt::color::yellow) | fmt::emphasis::bold, fmt_str("[warn][{}]: {}\n", cat, str), __VA_ARGS__); } while(0)
 #define gen_error(cat, str, ...) do { fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, fmt_str("[error][{}]: {}\n", cat, str), __VA_ARGS__); } while(0)
 
@@ -249,6 +250,43 @@ arena_create_frame_arena(
 }
 
 namespace utl {
+
+struct profile_t {
+    std::string_view name;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start;
+    bool stopped = false;
+
+    profile_t(std::string_view p_name) 
+        : name(p_name) {
+        start = std::chrono::high_resolution_clock::now();
+    }
+    
+    ~profile_t() {
+        if (stopped) return;
+        stop();
+    }
+
+    void stop() {
+        const auto stop = std::chrono::high_resolution_clock::now();
+        const auto delta = stop - start;
+        const auto m_time_delta = std::chrono::duration_cast<std::chrono::milliseconds>(delta).count();
+        const auto u_time_delta = std::chrono::duration_cast<std::chrono::microseconds>(delta).count();
+        const auto n_time_delta = std::chrono::duration_cast<std::chrono::nanoseconds>(delta).count();
+        ztd_info(name, " {}{}", 
+            m_time_delta ? m_time_delta : u_time_delta ? u_time_delta : n_time_delta,
+            m_time_delta ? "ms" : u_time_delta ? "us" : "ns");
+    }
+    
+    auto end() {
+        // stopped = true;
+        auto stop = std::chrono::high_resolution_clock::now();
+        const auto n_time_delta = std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start).count();
+        return n_time_delta;
+    }
+};
+
+
+
 
 template <typename T>
 struct pool_t : public arena_t {
